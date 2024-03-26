@@ -150,7 +150,8 @@ organization:
     restriction_mode: A
 
   committee_ids:
-    type: number[]
+    type: relation-list
+    to: committee/organization_id
     restriction_mode: B
     sql: (select array_agg(c.id) from committeeT c) as committee_ids
   active_meeting_ids:
@@ -724,6 +725,12 @@ committee:
     type: relation-list
     to: organization_tag/tagged_ids
     restriction_mode: A
+  organization_id:
+    type: relation
+    to: organization/committee_ids
+    required: true
+    restriction_mode: A
+    constant: true
 
 meeting:
   id:
