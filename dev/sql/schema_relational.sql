@@ -7,7 +7,7 @@ create or replace function check_not_null_for_relation_lists() returns trigger a
 -- usage with 3 parameters IN TRIGGER DEFINITION:
 -- table_name of field to check, usually a field in a view
 -- column_name of field to check
--- foreign_key field name of triggered table, that will be used to SELECT the values to check the not null 
+-- foreign_key field name of triggered table, that will be used to SELECT the values to check the not null.
 DECLARE
     table_name TEXT;
     column_name TEXT;
@@ -55,7 +55,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- MODELS_YML_CHECKSUM = '8651dc05aa0b7592a98b638594eb2d1f'
+-- MODELS_YML_CHECKSUM = '4965e682383824bec80f9e7a6c97d5d5'
 -- Type definitions
 DO $$
 BEGIN
@@ -457,7 +457,6 @@ CREATE TABLE IF NOT EXISTS organizationT (
     saml_metadata_idp text,
     saml_metadata_sp text,
     saml_private_key text,
-    committee_ids integer[],
     theme_id integer NOT NULL,
     users_email_sender varchar(256) DEFAULT 'OpenSlides',
     users_email_replyto varchar(256),
@@ -606,7 +605,8 @@ CREATE TABLE IF NOT EXISTS committeeT (
     external_id varchar(256),
     default_meeting_id integer,
     user_ids integer[],
-    forwarding_user_id integer
+    forwarding_user_id integer,
+    organization_id integer NOT NULL
 );
 
 
@@ -676,6 +676,7 @@ CREATE TABLE IF NOT EXISTS meetingT (
     list_of_speakers_show_amount_of_speakers_on_slide boolean DEFAULT True,
     list_of_speakers_present_users_only boolean DEFAULT False,
     list_of_speakers_show_first_contribution boolean DEFAULT False,
+    list_of_speakers_hide_contribution_count boolean DEFAULT False,
     list_of_speakers_allow_multiple_speakers boolean DEFAULT False,
     list_of_speakers_enable_point_of_order_speakers boolean DEFAULT True,
     list_of_speakers_can_create_point_of_order_for_others boolean DEFAULT False,
@@ -988,10 +989,12 @@ CREATE TABLE IF NOT EXISTS motionT (
     workflow_timestamp timestamptz,
     start_line_number integer CONSTRAINT minimum_start_line_number CHECK (start_line_number >= 1) DEFAULT 1,
     forwarded timestamptz,
+    additional_submitter varchar(256),
     lead_motion_id integer,
     sort_parent_id integer,
     origin_id integer,
     origin_meeting_id integer,
+    identical_motion_ids integer[],
     state_id integer NOT NULL,
     recommendation_id integer,
     category_id integer,
@@ -1004,6 +1007,7 @@ CREATE TABLE IF NOT EXISTS motionT (
 
 comment on column motionT.number_value is 'The number value of this motion. This number is auto-generated and read-only.';
 comment on column motionT.sequential_number is 'The (positive) serial number of this model in its meeting. This number is auto-generated and read-only.';
+comment on column motionT.identical_motion_ids is 'Changed from relation-list to number[], because it still can't be generated';
 
 
 CREATE TABLE IF NOT EXISTS motion_submitterT (
@@ -1613,6 +1617,7 @@ CREATE TABLE IF NOT EXISTS nm_chat_group_write_group_ids_groupT (
 -- View definitions
 
 CREATE OR REPLACE VIEW organization AS SELECT *,
+(select array_agg(c.id) from committeeT c) as committee_ids,
 (select array_agg(m.id) from meetingT m where m.is_active_in_organization_id = o.id) as active_meeting_ids,
 (select array_agg(m.id) from meetingT m where m.is_archived_in_organization_id = o.id) as archived_meeting_ids,
 (select array_agg(m.id) from meetingT m where m.template_for_organization_id = o.id) as template_meeting_ids,
@@ -1720,7 +1725,7 @@ CREATE OR REPLACE VIEW meeting AS SELECT *,
 (select array_agg(p.id) from projectorT p where p.used_as_default_projector_for_agenda_item_list_in_meeting_id = m.id) as default_projector_agenda_item_list_ids,
 (select array_agg(p.id) from projectorT p where p.used_as_default_projector_for_topic_in_meeting_id = m.id) as default_projector_topic_ids,
 (select array_agg(p.id) from projectorT p where p.used_as_default_projector_for_list_of_speakers_in_meeting_id = m.id) as default_projector_list_of_speakers_ids,
-(select array_agg(p.id) from projectorT p where p.used_as_default_projector_for_current_los_in_meeting_id = m.id) as default_projector_current_list_of_speakers_ids,
+(select array_agg(p.id) from projectorT p where p.used_as_default_projector_for_current_los_in_meeting_id = m.id) as default_projector_current_los_ids,
 (select array_agg(p.id) from projectorT p where p.used_as_default_projector_for_motion_in_meeting_id = m.id) as default_projector_motion_ids,
 (select array_agg(p.id) from projectorT p where p.used_as_default_projector_for_amendment_in_meeting_id = m.id) as default_projector_amendment_ids,
 (select array_agg(p.id) from projectorT p where p.used_as_default_projector_for_motion_block_in_meeting_id = m.id) as default_projector_motion_block_ids,
@@ -1798,7 +1803,6 @@ CREATE OR REPLACE VIEW motion AS SELECT *,
 (select array_agg(m1.id) from motionT m1 where m1.origin_id = m.id) as derived_motion_ids,
 (select array_agg(n.all_origin_id) from nm_motion_all_derived_motion_ids_motionT n where n.all_derived_motion_id = m.id) as all_origin_ids,
 (select array_agg(n.all_derived_motion_id) from nm_motion_all_derived_motion_ids_motionT n where n.all_origin_id = m.id) as all_derived_motion_ids,
-(select array_agg(n.identical_motion_id) from nm_motion_identical_motion_ids_motionT n where n.identical_motion_id = m.id) as identical_motion_ids,
 (select array_agg(g.id) from gm_motion_state_extension_reference_idsT g where g.motion_id = m.id) as state_extension_reference_ids,
 (select array_agg(g.motion_id) from gm_motion_state_extension_reference_idsT g where g.state_extension_reference_id_motion_id = m.id) as referenced_in_motion_state_extension_ids,
 (select array_agg(g.id) from gm_motion_recommendation_extension_reference_idsT g where g.motion_id = m.id) as recommendation_extension_reference_ids,
@@ -1962,6 +1966,7 @@ ALTER TABLE themeT ADD FOREIGN KEY(organization_id) REFERENCES organizationT(id)
 
 ALTER TABLE committeeT ADD FOREIGN KEY(default_meeting_id) REFERENCES meetingT(id);
 ALTER TABLE committeeT ADD FOREIGN KEY(forwarding_user_id) REFERENCES userT(id);
+ALTER TABLE committeeT ADD FOREIGN KEY(organization_id) REFERENCES organizationT(id);
 
 ALTER TABLE meetingT ADD FOREIGN KEY(is_active_in_organization_id) REFERENCES organizationT(id);
 ALTER TABLE meetingT ADD FOREIGN KEY(is_archived_in_organization_id) REFERENCES organizationT(id);
@@ -2181,12 +2186,12 @@ CREATE CONSTRAINT TRIGGER tr_ud_meeting_default_projector_list_of_speakers_ids A
 FOR EACH ROW EXECUTE FUNCTION check_not_null_for_relation_lists('meeting', 'default_projector_list_of_speakers_ids', 'used_as_default_projector_for_list_of_speakers_in_meeting_id');
 
 
--- definition trigger not null for meeting.default_projector_current_list_of_speakers_ids against projectorT.used_as_default_projector_for_current_los_in_meeting_id
-CREATE CONSTRAINT TRIGGER tr_i_meeting_default_projector_current_list_of_speakers_ids AFTER INSERT ON projectorT INITIALLY DEFERRED
-FOR EACH ROW EXECUTE FUNCTION check_not_null_for_relation_lists('meeting', 'default_projector_current_list_of_speakers_ids', 'used_as_default_projector_for_current_los_in_meeting_id');
+-- definition trigger not null for meeting.default_projector_current_los_ids against projectorT.used_as_default_projector_for_current_los_in_meeting_id
+CREATE CONSTRAINT TRIGGER tr_i_meeting_default_projector_current_los_ids AFTER INSERT ON projectorT INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION check_not_null_for_relation_lists('meeting', 'default_projector_current_los_ids', 'used_as_default_projector_for_current_los_in_meeting_id');
 
-CREATE CONSTRAINT TRIGGER tr_ud_meeting_default_projector_current_list_of_speakers_ids AFTER UPDATE OF used_as_default_projector_for_current_los_in_meeting_id OR DELETE ON projectorT
-FOR EACH ROW EXECUTE FUNCTION check_not_null_for_relation_lists('meeting', 'default_projector_current_list_of_speakers_ids', 'used_as_default_projector_for_current_los_in_meeting_id');
+CREATE CONSTRAINT TRIGGER tr_ud_meeting_default_projector_current_los_ids AFTER UPDATE OF used_as_default_projector_for_current_los_in_meeting_id OR DELETE ON projectorT
+FOR EACH ROW EXECUTE FUNCTION check_not_null_for_relation_lists('meeting', 'default_projector_current_los_ids', 'used_as_default_projector_for_current_los_in_meeting_id');
 
 
 -- definition trigger not null for meeting.default_projector_motion_ids against projectorT.used_as_default_projector_for_motion_in_meeting_id
@@ -2291,6 +2296,7 @@ Model.Field -> Model.Field
 */
 
 /*
+SQL nts+:1tR => organization/committee_ids:-> committee/organization_id
 SQL nt:1t => organization/active_meeting_ids:-> meeting/is_active_in_organization_id
 SQL nt:1t => organization/archived_meeting_ids:-> meeting/is_archived_in_organization_id
 SQL nt:1t => organization/template_meeting_ids:-> meeting/template_for_organization_id
@@ -2339,6 +2345,7 @@ SQL nt:nt => committee/forward_to_committee_ids:-> committee/receive_forwardings
 SQL nt:nt => committee/receive_forwardings_from_committee_ids:-> committee/forward_to_committee_ids
 FIELD 1t:nt => committee/forwarding_user_id:-> user/forwarding_committee_ids
 SQL nt:nGt => committee/organization_tag_ids:-> organization_tag/tagged_ids
+FIELD 1tR:nts+ => committee/organization_id:-> organization/committee_ids
 
 FIELD 1t:nt => meeting/is_active_in_organization_id:-> organization/active_meeting_ids
 FIELD 1t:nt => meeting/is_archived_in_organization_id:-> organization/archived_meeting_ids
@@ -2415,7 +2422,7 @@ SQL nt:1GtR => meeting/projection_ids:-> projection/content_object_id
 SQL ntR:1t => meeting/default_projector_agenda_item_list_ids:-> projector/used_as_default_projector_for_agenda_item_list_in_meeting_id
 SQL ntR:1t => meeting/default_projector_topic_ids:-> projector/used_as_default_projector_for_topic_in_meeting_id
 SQL ntR:1t => meeting/default_projector_list_of_speakers_ids:-> projector/used_as_default_projector_for_list_of_speakers_in_meeting_id
-SQL ntR:1t => meeting/default_projector_current_list_of_speakers_ids:-> projector/used_as_default_projector_for_current_los_in_meeting_id
+SQL ntR:1t => meeting/default_projector_current_los_ids:-> projector/used_as_default_projector_for_current_los_in_meeting_id
 SQL ntR:1t => meeting/default_projector_motion_ids:-> projector/used_as_default_projector_for_motion_in_meeting_id
 SQL ntR:1t => meeting/default_projector_amendment_ids:-> projector/used_as_default_projector_for_amendment_in_meeting_id
 SQL ntR:1t => meeting/default_projector_motion_block_ids:-> projector/used_as_default_projector_for_motion_block_in_meeting_id
@@ -2499,7 +2506,6 @@ FIELD 1t:nt => motion/origin_meeting_id:-> meeting/forwarded_motion_ids
 SQL nt:1t => motion/derived_motion_ids:-> motion/origin_id
 SQL nt:nt => motion/all_origin_ids:-> motion/all_derived_motion_ids
 SQL nt:nt => motion/all_derived_motion_ids:-> motion/all_origin_ids
-SQL nt:nt => motion/identical_motion_ids:-> motion/identical_motion_ids
 FIELD 1tR:nt => motion/state_id:-> motion_state/motion_ids
 FIELD 1t:nt => motion/recommendation_id:-> motion_state/motion_recommendation_ids
 FIELD nGt:nt => motion/state_extension_reference_ids:-> motion/referenced_in_motion_state_extension_ids
@@ -2652,7 +2658,7 @@ SQL 1t:1tR => projector/used_as_reference_projector_meeting_id:-> meeting/refere
 FIELD 1t:ntR => projector/used_as_default_projector_for_agenda_item_list_in_meeting_id:-> meeting/default_projector_agenda_item_list_ids
 FIELD 1t:ntR => projector/used_as_default_projector_for_topic_in_meeting_id:-> meeting/default_projector_topic_ids
 FIELD 1t:ntR => projector/used_as_default_projector_for_list_of_speakers_in_meeting_id:-> meeting/default_projector_list_of_speakers_ids
-FIELD 1t:ntR => projector/used_as_default_projector_for_current_los_in_meeting_id:-> meeting/default_projector_current_list_of_speakers_ids
+FIELD 1t:ntR => projector/used_as_default_projector_for_current_los_in_meeting_id:-> meeting/default_projector_current_los_ids
 FIELD 1t:ntR => projector/used_as_default_projector_for_motion_in_meeting_id:-> meeting/default_projector_motion_ids
 FIELD 1t:ntR => projector/used_as_default_projector_for_amendment_in_meeting_id:-> meeting/default_projector_amendment_ids
 FIELD 1t:ntR => projector/used_as_default_projector_for_motion_block_in_meeting_id:-> meeting/default_projector_motion_block_ids
